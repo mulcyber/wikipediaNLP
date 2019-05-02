@@ -143,10 +143,10 @@ def get_all_dumps(force=False):
 
 # In[4]:
 
-
-links = get_all_dumps()
-print("Number of abstract dumps: %d" % len(links["abstracts"]))
-print("Number of page dumps: %d" % len(links["pages"]))
+if __name__ == "__main__":
+    links = get_all_dumps()
+    print("Number of abstract dumps: %d" % len(links["abstracts"]))
+    print("Number of page dumps: %d" % len(links["pages"]))
 
 
 # ## Loading and parsing file
@@ -383,8 +383,9 @@ class Abstracts:
 
 # In[ ]:
 
-print("Precomputing abstracts")
-precompute_abstracts()
+if __name__ == "__main__":
+    print("Precomputing abstracts")
+    precompute_abstracts()
 
 
 # In[26]:
@@ -393,7 +394,7 @@ precompute_abstracts()
 page_precomp_filepath = path.join(DATA_folder, "precomp", "pages_raw.text.gz")
 url_base = "https://dumps.wikimedia.org/enwiki/latest/"
 
-def precompute_pages(keep_dumps=True, force=False, flush_buffer=50):
+def precompute_pages(keep_dumps=True, force=False, flush_buffer=50, max_dumps=-1):
     if path.isfile(page_precomp_filepath):
         if force:
             os.remove(page_precomp_filepath)
@@ -404,7 +405,11 @@ def precompute_pages(keep_dumps=True, force=False, flush_buffer=50):
     # Open a file with on the fly compression
     with gzip.open(page_precomp_filepath, "w") as f:
         # For every page dump
+        i = 0
         for fp in dumps["pages"]:
+            i += 1
+            if max_dumps > 0 and i > max_dumps:
+                break
             fp = download_file(url_base + fp)
             print("Processing %s" % fp)
             # Load and process .xml.bz
@@ -431,7 +436,7 @@ def precompute_pages(keep_dumps=True, force=False, flush_buffer=50):
 class Pages:
     def __init__(self):
         if not path.isfile(page_precomp_filepath):
-            raise Exception("Abstract not precomputed")
+            raise Exception("Pages not precomputed")
         self.file = gzip.open(page_precomp_filepath, "r")
     
     def __iter__(self):
@@ -447,8 +452,9 @@ class Pages:
 
 # In[ ]:
 
-print("Precomputing pages")
-precompute_pages()
+if __name__ == "__main__":
+    print("Precomputing pages")
+    precompute_pages()
 
 
 # In[ ]:
@@ -456,17 +462,22 @@ precompute_pages()
 
 # https://dl.fbaipublicfiles.com/fasttext/vectors-english/wiki-news-300d-1M.vec.zip
 word2vec_pickle_path = path.join(DATA_folder, "wiki-news-300d-1M.vec.pkl")
-print("Loading Word2vec model.")
-if path.isfile(word2vec_pickle_path):
-    word2vec = pickle.load(open(word2vec_pickle_path, "rb"))
-    print("Loaded from pickle")
-else:
-    word2vec_path = path.join(DATA_folder, "wiki-news-300d-1M.vec")
-    word2vec = KeyedVectors.load_word2vec_format(word2vec_path)
-    print("Loaded")
-    print("Pickling word2vec")
-    pickle.dump(word2vec, open(word2vec_pickle_path, "wb"))
-    print("Done")
+def get_word2vec():
+    print("Loading Word2vec model.")
+    if path.isfile(word2vec_pickle_path):
+        word2vec = pickle.load(open(word2vec_pickle_path, "rb"))
+        print("Loaded from pickle")
+    else:
+        word2vec_path = path.join(DATA_folder, "wiki-news-300d-1M.vec")
+        word2vec = KeyedVectors.load_word2vec_format(word2vec_path)
+        print("Loaded")
+        print("Pickling word2vec")
+        pickle.dump(word2vec, open(word2vec_pickle_path, "wb"))
+        print("Done")
+    return word2vec
+
+if __name__ == "__main__":
+    word2vec = get_word2vec()
 
 # print("Loading word2vec")
 # word2vec = {}
@@ -485,35 +496,39 @@ else:
 from nltk.tokenize import word_tokenize
 abs_vec_path = path.join(DATA_folder, "precomp", "abstracts_vectorize.vec.gz")
 
-if not path.isfile(abs_vec_path):
-    abstracts = Abstracts()
-    print("Calculated mean for abstracts")
-    with gzip.open(abs_vec_path, "w") as file:
-        vector = np.zeros(300, dtype=np.float64)
-        i = 0
-        for a in abstracts:
-            print("\rComputed %s abstracts" % SIunit(i), end="")
-            i += 1
-            if type(a["abs"]) != type(" "):
-                print(a["abs"])
-            tokens = word_tokenize(a["abs"])
-            vector[:] = 0
-            norm = 0
-            for t in tokens:
-                try:
-                    vector += word2vec.get_vector(t)
-                    norm += 1
-                except KeyError:
-                    pass
-            if norm != 0:
-                file.write((repr({
-                    "id": a["id"],
-                    "name": a["name"],
-                    "vector": (vector / norm).tolist()
-                }) + "\n").encode("utf-8"))
-else:
-    print("Abstract vectors already computed: aborting.")
+def compute_single_vector_abstracts():
+    if not path.isfile(abs_vec_path):
+        abstracts = Abstracts()
+        print("Calculated mean for abstracts")
+        with gzip.open(abs_vec_path, "w") as file:
+            vector = np.zeros(300, dtype=np.float64)
+            i = 0
+            for a in abstracts:
+                print("\rComputed %s abstracts" % SIunit(i), end="")
+                i += 1
+                if type(a["abs"]) != type(" "):
+                    print(a["abs"])
+                tokens = word_tokenize(a["abs"])
+                vector[:] = 0
+                norm = 0
+                for t in tokens:
+                    try:
+                        vector += word2vec.get_vector(t)
+                        norm += 1
+                    except KeyError:
+                        pass
+                if norm != 0:
+                    file.write((repr({
+                        "id": a["id"],
+                        "name": a["name"],
+                        "vector": (vector / norm).tolist()
+                    }) + "\n").encode("utf-8"))
+    else:
+        print("Abstract vectors already computed: aborting.")
 
+
+if __name__ == "__main__":
+    compute_single_vector_abstracts()
 
 
 class VecAbstracts:
@@ -536,13 +551,68 @@ class VecAbstracts:
         else:
             return StopIteration
 
-abstract_keyedvec_path = path.join(DATA_folder, "precomp", "abs_keyed_vec.pkl")
-keyedvec = KeyedVectors(300)
-vecAbs = VecAbstracts()
-i = 0
-for va in vecAbs:
-    print("\r%d abstract keyed vector added." % i, end="")
-    i += 1
-    keyedvec.add([str(va["id"])], [va["vector"]])
-pickle.dump(keyedvec, open(abstract_keyedvec_path, "rb"))
+if __name__ == "__main__":
+    abstract_keyedvec_path = path.join(DATA_folder, "precomp", "abs_keyed_vec.pkl")
+    keyedvec = KeyedVectors(300)
+    vecAbs = VecAbstracts()
+    i = 0
+    for va in vecAbs:
+        print("\r%d abstract keyed vector added." % i, end="")
+        i += 1
+        keyedvec.add([str(va["id"])], [va["vector"]])
+    pickle.dump(keyedvec, open(abstract_keyedvec_path, "rb"))
 
+pages_vec_path = path.join(DATA_folder, "precomp", "pages_vectorize.vec.gz")
+def vectorize_pages(pages):
+    if not path.isfile(pages_vec_path):
+        print("Calculating vectorized pages")
+        with gzip.open(abs_vec_path, "w") as file:
+            i = 0
+            for p in pages:
+                doc = []
+                print("\rComputed %s pages" % SIunit(i), end="")
+                i += 1
+                if type(p["content"]) != type(" "):
+                    print(p["content"])
+                tokens = word_tokenize(p["content"])
+                for t in tokens:
+                    try:
+                        doc.append(word2vec.get_vector(t))
+                    except KeyError:
+                        pass
+                if doc:
+                    c = StringIO()
+                    np.savetxt(c, np.array(doc).reshape((-1,1)))
+                    if len(c) > 0:
+                        print("Error, multiline c")
+                    file.write((repr({
+                        "id": p["id"],
+                        "name": p["name"],
+                        "content": c.readlines()[0]
+                    }) + "\n").encode("utf-8"))
+    else:
+        print("Pages vectors already computed: aborting.")
+
+
+class VecPages:
+    def __init__(self):
+        if not path.isfile(pages_vec_path):
+            raise Exception("Pages vec not precomputed")
+        self.file = gzip.open(pages_vec_path, "r")
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        line = self.file.readline()
+        if line:
+            try:
+                p = ast.literal_eval(line.decode("utf-8"))
+                c = StringIO(p["content"])
+                p["content"] = np.loadtxt(c).reshape((-1, 300))
+                return p
+            except Exception as e:
+                print("Error Loading VecPages item:", e)
+                return self.__next__()
+        else:
+            return StopIteration
