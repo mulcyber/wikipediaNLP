@@ -206,6 +206,8 @@ def loadXML(filepath):
 # 
 # It returns a array of dictionnaries with keys: "id", "name" and "abs".
 
+# In[6]:
+
 
 def parse_abstract(xmlRoot):
     """Parse the xml abstract file."""
@@ -291,9 +293,12 @@ def parse_abstract(xmlRoot):
 # Notes: Since the page urls are not in the page dump and the page ids are not in the abstract dump, it is not possible to link the two entities.  
 # 
 # TODO:
+# - Remove Wikitext formating (https://en.wikipedia.org/wiki/Help:Wikitext)
 # - Remove redirect pages
 # - Remove disambiguation pages
 
+
+# In[16]:
 
 
 def parse_page(xmlRoot):
@@ -317,6 +322,9 @@ def parse_page(xmlRoot):
 # ### Preprocess data
 # 
 # For easy computation and low memory footprint, we precompute the wikipedia dumps.
+
+# In[25]:
+
 
 abs_precomp_filepath = path.join(DATA_folder, "precomp", "abstracts_raw.text.gz")
 url_base = "https://dumps.wikimedia.org/enwiki/latest/"
@@ -477,29 +485,64 @@ else:
 from nltk.tokenize import word_tokenize
 abs_vec_path = path.join(DATA_folder, "precomp", "abstracts_vectorize.vec.gz")
 
-abstracts = Abstracts()
-print("Calculated mean for abstracts")
-with gzip.open(abs_vec_path, "w") as file:
-    vector = np.zeros(300, dtype=np.float64)
-    i = 0
-    for a in abstracts:
-        print("\rComputed %s abstracts" % SIunit(i), end="")
-        i += 1
-        if type(a["abs"]) != type(" "):
-            print(a["abs"])
-        tokens = word_tokenize(a["abs"])
-        vector[:] = 0
-        norm = 0
-        for t in tokens:
+if not path.isfile(abs_vec_path):
+    abstracts = Abstracts()
+    print("Calculated mean for abstracts")
+    with gzip.open(abs_vec_path, "w") as file:
+        vector = np.zeros(300, dtype=np.float64)
+        i = 0
+        for a in abstracts:
+            print("\rComputed %s abstracts" % SIunit(i), end="")
+            i += 1
+            if type(a["abs"]) != type(" "):
+                print(a["abs"])
+            tokens = word_tokenize(a["abs"])
+            vector[:] = 0
+            norm = 0
+            for t in tokens:
+                try:
+                    vector += word2vec.get_vector(t)
+                    norm += 1
+                except KeyError:
+                    pass
+            if norm != 0:
+                file.write((repr({
+                    "id": a["id"],
+                    "name": a["name"],
+                    "vector": (vector / norm).tolist()
+                }) + "\n").encode("utf-8"))
+else:
+    print("Abstract vectors already computed: aborting.")
+
+
+
+class VecAbstracts:
+    def __init__(self):
+        if not path.isfile(abs_vec_path):
+            raise Exception("Abstract vec not precomputed")
+        self.file = gzip.open(abs_vec_path, "r")
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        line = self.file.readline()
+        if line:
             try:
-                vector += word2vec.get_vector(t)
-                norm += 1
-            except KeyError:
-                pass
-        if norm != 0:
-            file.write(repr({
-                "id": a["id"],
-                "name": a["name"],
-                "vector": vector / norm
-            }).encode("utf-8"))
+                return ast.literal_eval(line.decode("utf-8"))
+            except Exception as e:
+                print("Error Loading VecAbstract item:", e)
+                return self.__next__()
+        else:
+            return StopIteration
+
+abstract_keyedvec_path = path.join(DATA_folder, "precomp", "abs_keyed_vec.pkl")
+keyedvec = KeyedVectors(300)
+vecAbs = VecAbstracts()
+i = 0
+for va in vecAbs:
+    print("\r%d abstract keyed vector added." % i, end="")
+    i += 1
+    keyedvec.add([str(va["id"])], [va["vector"]])
+pickle.dump(keyedvec, open(abstract_keyedvec_path, "rb"))
 
