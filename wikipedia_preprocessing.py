@@ -18,10 +18,12 @@ import urllib
 # Filesystem library
 from os import path
 import os
+from io import StringIO
 # Compression libraries
 import gzip
 import bz2
 import zipfile
+import codecs
 # Regex library
 import re
 # NLP tookit
@@ -36,6 +38,8 @@ from gensim.models import KeyedVectors
 # Serialization
 import ast
 import pickle
+import gc
+from time import time
 
 nltk.download("punkt")
 
@@ -305,7 +309,10 @@ def parse_page(xmlRoot):
     """Parse the xml page file."""
     ns = xmlRoot.tag[:-9]
     data = []
+    i = 0
     for p in xmlRoot.iter(ns + "page"):
+        i += 1
+        print("\r%s articles loaded." % SIunit(i), end="")
         page_name = p.find(ns + "title").text
         page_id = int(p.find(ns + "id").text)
         page_wikitext = p.find(ns + "revision/" + ns + "text")
@@ -378,7 +385,7 @@ class Abstracts:
         if line:
             return ast.literal_eval(line.decode("utf-8"))
         else:
-            return StopIteration
+            raise StopIteration
 
 
 # In[ ]:
@@ -447,7 +454,7 @@ class Pages:
         if line:
             return ast.literal_eval(line.decode("utf-8"))
         else:
-            return StopIteration
+            raise StopIteration
 
 
 # In[ ]:
@@ -469,7 +476,7 @@ def get_word2vec():
         print("Loaded from pickle")
     else:
         word2vec_path = path.join(DATA_folder, "wiki-news-300d-1M.vec")
-        word2vec = KeyedVectors.load_word2vec_format(word2vec_path)
+        word2vec = KeyedVectors.load_word2vec_format(word2vec_path, limit=500000)
         print("Loaded")
         print("Pickling word2vec")
         pickle.dump(word2vec, open(word2vec_pickle_path, "wb"))
@@ -549,7 +556,7 @@ class VecAbstracts:
                 print("Error Loading VecAbstract item:", e)
                 return self.__next__()
         else:
-            return StopIteration
+            raise StopIteration
 
 if __name__ == "__main__":
     abstract_keyedvec_path = path.join(DATA_folder, "precomp", "abs_keyed_vec.pkl")
@@ -557,18 +564,26 @@ if __name__ == "__main__":
     vecAbs = VecAbstracts()
     i = 0
     for va in vecAbs:
-        print("\r%d abstract keyed vector added." % i, end="")
+        print("\r%s abstract keyed vector added." % SIunit(i), end="")
         i += 1
         keyedvec.add([str(va["id"])], [va["vector"]])
     pickle.dump(keyedvec, open(abstract_keyedvec_path, "rb"))
 
 pages_vec_path = path.join(DATA_folder, "precomp", "pages_vectorize.vec.gz")
-def vectorize_pages(pages):
-    if not path.isfile(pages_vec_path):
+def vectorize_pages(pages, word2vec, resume = True):
+    if not path.isfile(pages_vec_path) or resume:
+        i = 0
+        if resume and path.isfile(pages_vec_path):
+            with gzip.open(pages_vec_path, "r") as file:
+                while file.readline():
+                    next(pages)
+                    i += 1
         print("Calculating vectorized pages")
-        with gzip.open(abs_vec_path, "w") as file:
-            i = 0
+        with gzip.open(pages_vec_path, "w") as file:
+            print("\%s pages already computed" % SIunit(i), end="")
             for p in pages:
+                if i % 10 == 9:
+                    gc.collect()
                 doc = []
                 print("\rComputed %s pages" % SIunit(i), end="")
                 i += 1
@@ -582,23 +597,70 @@ def vectorize_pages(pages):
                         pass
                 if doc:
                     c = StringIO()
-                    np.savetxt(c, np.array(doc).reshape((-1,1)))
-                    if len(c) > 0:
-                        print("Error, multiline c")
                     file.write((repr({
                         "id": p["id"],
                         "name": p["name"],
-                        "content": c.readlines()[0]
+                        "content": codecs.encode(pickle.dumps(doc), "base64").decode()
                     }) + "\n").encode("utf-8"))
+                    c.close()
+                    
+                if i % 100 == 99:
+                    file.flush()
     else:
         print("Pages vectors already computed: aborting.")
 
+idf_path = path.join(DATA_folder, "precomp", "idf.pkl")
+def vectorize_pages_filtered(pages, word2vec, names, filepath):
+    if not path.isfile(filepath):
+        print("Calculating vectorized pages")
+        i = 0
+        appears = np.zeros(500000)
+        with gzip.open(filepath, "w") as file:
+            for p in pages:
+                if p["name"] in names:
+                    if i % 10 == 9:
+                        gc.collect()
+                    doc = []
+                    print("\rComputed %s pages" % SIunit(i), end="")
+                    i += 1
+                    if type(p["content"]) != type(" "):
+                        print(p["content"])
+                    tokens = word_tokenize(p["content"])
+                    for t in tokens:
+                        try:
+                            if word2vec.get_vector(t) in not doc:
+                                appears[word2vec.vocab.get(t).index] += 1
+                            doc.append(word2vec.get_vector(t))
+                        except KeyError:
+                            pass
+                    if doc:
+                        c = StringIO()
+                        file.write((repr({
+                            "id": p["id"],
+                            "name": p["name"],
+                            "content": codecs.encode(pickle.dumps(doc), "base64").decode()
+                        }) + "\n").encode("utf-8"))
+                        c.close()
 
+                    if i % 100 == 99:
+                        file.flush()
+                del p
+        Ncorp = i
+        idf = np.log(Ncorp / appears)
+        with open(idf_path, "wb") as f:
+            pickle.dump(idf, f)
+    else:
+        print("Pages vectors already computed: aborting.")
+        
 class VecPages:
-    def __init__(self):
-        if not path.isfile(pages_vec_path):
+    def __init__(self, filepath=None):
+        if not filepath:
+            self.filepath = pages_vec_path
+        else:
+            self.filepath = filepath
+        if not path.isfile(self.filepath):
             raise Exception("Pages vec not precomputed")
-        self.file = gzip.open(pages_vec_path, "r")
+        self.file = gzip.open(self.filepath, "r")
 
     def __iter__(self):
         return self
@@ -607,12 +669,15 @@ class VecPages:
         line = self.file.readline()
         if line:
             try:
+                print("Ast")
                 p = ast.literal_eval(line.decode("utf-8"))
-                c = StringIO(p["content"])
-                p["content"] = np.loadtxt(c).reshape((-1, 300))
+                print("decode")
+                p["content"] = pickle.loads(codecs.decode(p["content"].encode(), "base64"))
+                print("done")
                 return p
             except Exception as e:
                 print("Error Loading VecPages item:", e)
                 return self.__next__()
         else:
-            return StopIteration
+            print("Stop iteration")
+            raise StopIteration
